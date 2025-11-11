@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+matplotlib
+numpy
+scipy
+pandas
+rdkit-pypi  # <-- No more problems!
