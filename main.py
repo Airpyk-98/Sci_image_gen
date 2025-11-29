@@ -3,10 +3,10 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 import io
 import os
-import uuid  # For unique file names
-import time # For unique file names
+import uuid
+import time
 
-# Import all libraries your agent might use
+# Import libraries
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy
@@ -15,83 +15,60 @@ import rdkit
 
 app = FastAPI()
 
-# ⚠️ CRITICAL: This is the folder path where Render's Persistent Disk will be mounted.
-# You MUST configure a Persistent Disk in Render with this Mount Path.
+# 1. SETUP STORAGE (Matches your Render Disk Mount Path)
 IMAGE_STORAGE_PATH = "/var/data/images"
-
-# Ensure the directory exists when the app starts
+# Ensure the directory exists
 os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
 
-
-# This defines the JSON it expects: {"code": "..."}
 class CodeRequest(BaseModel):
     code: str
 
-
-# --- ENDPOINT 1: Executes Code and Returns URL ---
+# --- ENDPOINT 1: EXECUTE & SAVE ---
 @app.post("/execute-plot")
 def execute_plot_code(request: CodeRequest):
 
-    # Create a local "sandbox" for the exec() function
+    # Define the sandbox environment
     local_scope = {
-        "plt": plt,
-        "np": np,
-        "scipy": scipy,
-        "pd": pd,
-        "io": io,
-        "rdkit": rdkit,
-        "image_bytes": None
+        "plt": plt, "np": np, "scipy": scipy, "pd": pd, "io": io, "rdkit": rdkit, "image_bytes": None
     }
 
     try:
+        # Execute the generated code
         exec(request.code, {}, local_scope)
         image_bytes = local_scope.get("image_bytes")
 
         if image_bytes:
-            # 1. Generate a unique filename
-            unique_filename = f"{uuid.uuid4().hex}-{int(time.time())}.png"
-            file_path = os.path.join(IMAGE_STORAGE_PATH, unique_filename)
+            # A. Generate a unique filename
+            filename = f"{uuid.uuid4().hex}_{int(time.time())}.png"
+            file_path = os.path.join(IMAGE_STORAGE_PATH, filename)
 
-            # 2. Save the image to the persistent disk
+            # B. Save the image to the Render Persistent Disk
             with open(file_path, "wb") as f:
                 f.write(image_bytes)
 
-            # 3. Construct the public download URL
-            # Note: You MUST replace YOUR_SERVICE_URL with your actual Render URL
-            # The 'https://' is hardcoded here, so be sure to update it later.
-            download_url = f"https://YOUR_SERVICE_URL.onrender.com/download/{unique_filename}"
+            # C. Create the Direct Public URL
+            # I HAVE INSERTED YOUR URL HERE:
+            base_url = "https://my-n8n-python-worker.onrender.com"
+            direct_url = f"{base_url}/images/{filename}"
 
-            # 4. Return the URL as a JSON response
-            return JSONResponse(
-                content={"download_url": download_url},
-                status_code=200
-            )
+            # D. Return the URL in JSON format
+            return JSONResponse(content={"url": direct_url}, status_code=200)
 
         else:
-            raise HTTPException(status_code=400, detail="Code did not produce 'image_bytes'.")
+            raise HTTPException(status_code=400, detail="Code ran but 'image_bytes' was None.")
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Code execution failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Execution Error: {str(e)}")
 
 
-# --- ENDPOINT 2: Serves the Downloaded File ---
-@app.get("/download/{filename}")
-def get_image_file(filename: str):
-    
+# --- ENDPOINT 2: SERVE IMAGE (FOR GOOGLE DOCS) ---
+@app.get("/images/{filename}")
+def get_image(filename: str):
     file_path = os.path.join(IMAGE_STORAGE_PATH, filename)
     
-    # 1. Check if the file exists on the disk
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found or has been deleted.")
+        raise HTTPException(status_code=404, detail="Image not found")
 
-    # 2. Return the file using FileResponse
-    # The Content-Disposition header forces the browser to download it.
-    return FileResponse(
-        file_path, 
-        media_type="image/png", 
-        filename=filename,
-        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
-    )
-    
-    # Optional: You may add logic here to delete the file after a short delay 
-    # to prevent the disk from filling up, but that requires more complex async tasks.
+    # CRITICAL: Return the file natively (No 'Attachment' headers)
+    # This allows Google Docs to render it inline.
+    return FileResponse(file_path, media_type="image/png")
